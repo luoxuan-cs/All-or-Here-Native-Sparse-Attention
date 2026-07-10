@@ -6,6 +6,7 @@
 #   https://github.com/fla-org/flash-linear-attention/graphs/contributors
 
 from .abc import chunk_abc
+from .ahnsa import ahnsa_attn
 from .attn import parallel_attn
 from .attnres import fused_attnres
 from .based import fused_chunk_based, parallel_based
@@ -37,6 +38,7 @@ from .simple_gla import chunk_simple_gla, fused_chunk_simple_gla, fused_recurren
 from .wall_attn import parallel_wall_attn, parallel_wall_attn_decode
 
 __all__ = [
+    'ahnsa_attn',
     'chunk_abc',
     'chunk_comba',
     'chunk_delta_rule',

@@ -6,6 +6,7 @@
 #   https://github.com/fla-org/flash-linear-attention/graphs/contributors
 
 from fla.models.abc import ABCConfig, ABCForCausalLM, ABCModel
+from fla.models.ahnsa import AHNSAConfig, AHNSAForCausalLM, AHNSAModel
 from fla.models.bitnet import BitNetConfig, BitNetForCausalLM, BitNetModel
 from fla.models.comba import CombaConfig, CombaForCausalLM, CombaModel
 from fla.models.delta_net import DeltaNetConfig, DeltaNetForCausalLM, DeltaNetModel
@@ -49,6 +50,9 @@ __all__ = [
     'ABCConfig',
     'ABCForCausalLM',
     'ABCModel',
+    'AHNSAConfig',
+    'AHNSAForCausalLM',
+    'AHNSAModel',
     'BitNetConfig',
     'BitNetForCausalLM',
     'BitNetModel',

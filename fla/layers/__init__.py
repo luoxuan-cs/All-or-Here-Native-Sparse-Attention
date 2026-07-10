@@ -6,6 +6,7 @@
 #   https://github.com/fla-org/flash-linear-attention/graphs/contributors
 
 from .abc import ABCAttention
+from .ahnsa import AHNSAAttention
 from .attn import Attention
 from .based import BasedLinearAttention
 from .bitattn import BitAttention
@@ -45,6 +46,7 @@ from .yoco import YOCOCrossAttention, YOCOGatedRetention, YOCOSharedKVBuilder
 
 __all__ = [
     'ABCAttention',
+    'AHNSAAttention',
     'Attention',
     'BasedLinearAttention',
     'BitAttention',

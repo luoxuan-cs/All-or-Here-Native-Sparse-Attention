@@ -13,11 +13,22 @@
 
 --------
 
+> [!NOTE]
+> **This repository is a fork of [`fla-org/flash-linear-attention`](https://github.com/fla-org/flash-linear-attention)**,
+> forked from commit [`7dd7cf5`](https://github.com/fla-org/flash-linear-attention/commit/7dd7cf5ed265e35f124940107ebc03173ce2bb2a)
+> (`v0.5.1-51-g7dd7cf5e`, 2026-07-10). Everything upstream provides is unchanged; on top of it, this fork adds
+> **AHNSA (AHA-gated Native Sparse Attention)** — see [Models](#models) and the
+> [AHNSA](#ahnsa-aha-gated-native-sparse-attention) usage section below, or the full design note in
+> [`AHNSA_DESIGN.md`](AHNSA_DESIGN.md).
+
+--------
+
 * [News](#news)
 * [Models](#models)
 * [Installation](#installation)
 * [Usage](#usage)
   * [Token Mixing](#token-mixing)
+  * [AHNSA (AHA-gated Native Sparse Attention)](#ahnsa-aha-gated-native-sparse-attention)
   * [Fused Modules](#fused-modules)
   * [Generation](#generation)
   * [Hybrid Models](#hybrid-models)
@@ -30,6 +41,7 @@
 
 ## News
 
+- [2026-07] 🧠 **(this fork)** Add AHNSA (AHA-gated Native Sparse Attention): NSA's local sliding-window branch always runs, while its compression + selection ("distant path") branches are additionally gated per-token-per-head by a hard, STE-trained router, following [AHA](https://arxiv.org/abs/2512.22562)'s "All-or-Here" idea. See [`fla/layers/ahnsa.py`](fla/layers/ahnsa.py), [`fla/models/ahnsa`](fla/models/ahnsa), [`fla/ops/ahnsa`](fla/ops/ahnsa), and the design note in [`AHNSA_DESIGN.md`](AHNSA_DESIGN.md).
 - [2026-07] 🧱 Add a [Gluon](https://triton-lang.org/main/getting-started/tutorials/gluon/) backend for [AttnRes](fla/ops/attnres).
 - [2026-07] 🚀 Add [FlashQLA](https://github.com/QwenLM/FlashQLA) backend for [Gated DeltaNet](fla/ops/gated_delta_rule).
 - [2026-06] 🔭 Add Parallax implementation to `fla` ([paper](https://arxiv.org/abs/2605.29157)).
@@ -115,6 +127,7 @@
 | 2026  |   Gated DeltaNet 2   | [Gated DeltaNet-2: Decoupling Erase and Write in Linear Attention](https://arxiv.org/abs/2605.22791)                                          | [code](https://github.com/fla-org/flash-linear-attention/tree/main/fla/ops/gdn2)                       |
 | 2026  |         Wall         | [Wall Attention: Length Generalization With Diagonal Gates](https://blog.tilderesearch.com/blog/wall-attn)                                    | [code](https://github.com/fla-org/flash-linear-attention/tree/main/fla/ops/wall_attn)                  |
 | 2026  |       Parallax       | [Parallax: Parameterized Local Linear Attention for Language Modeling](https://arxiv.org/abs/2605.29157)                                      | [code](https://github.com/fla-org/flash-linear-attention/tree/main/fla/ops/parallax)                   |
+| 2026  |    AHNSA (this fork) | NSA (above) gated per-token-per-head à la [AHA: Learning When Not to Attend Globally](https://arxiv.org/abs/2512.22562) — design note: [`AHNSA_DESIGN.md`](AHNSA_DESIGN.md) | [code](fla/layers/ahnsa.py)                   |
 
 ## Installation
 
@@ -241,6 +254,55 @@ GLAForCausalLM(
 ```
 
 </details>
+
+### AHNSA (AHA-gated Native Sparse Attention)
+
+**AHNSA** is this fork's addition on top of NSA: the local sliding-window branch always runs, while NSA's
+compression + selection ("distant path") branches are additionally gated, as a single unit, by a hard,
+per-(token, head) router trained with a Straight-Through Estimator (STE) — see [`AHNSA_DESIGN.md`](AHNSA_DESIGN.md)
+for the full design and [`fla/ops/ahnsa/parallel.py`](fla/ops/ahnsa/parallel.py) for why this also yields a real
+compute-skip at inference (not just a masked one).
+
+Layer-level usage (identical call signature to [`NativeSparseAttention`](fla/layers/nsa.py), plus the router):
+
+```py
+>>> import torch
+>>> from fla.layers import AHNSAAttention
+>>> batch_size, seq_len, hidden_size = 2, 2048, 2048
+>>> device, dtype = 'cuda:0', torch.bfloat16
+>>> attn = AHNSAAttention(
+...     hidden_size=hidden_size, num_heads=64, num_kv_heads=4, head_dim=32,
+...     block_size=64, block_counts=16, window_size=512,
+... ).to(device=device, dtype=dtype)
+>>> x = torch.randn(batch_size, seq_len, hidden_size).to(device=device, dtype=dtype)
+>>> y, attentions, past_key_values, aha_gate_soft, aha_gate_hard = attn(x)
+>>> y.shape, aha_gate_soft.shape  # gate tensors are [batch_size, seq_len, num_heads]
+(torch.Size([2, 2048, 2048]), torch.Size([2, 2048, 64]))
+```
+
+Model-level usage via 🤗 Transformers (same pattern as every other model in `fla`):
+
+```py
+>>> from fla.models import AHNSAConfig
+>>> from transformers import AutoModelForCausalLM
+>>> config = AHNSAConfig(aha_tau=0.5, aha_lambda=3e-4, aha_gate_bias_init=4.0)
+>>> model = AutoModelForCausalLM.from_config(config)
+```
+
+> [!IMPORTANT]
+> `aha_tau` is the hard-gating threshold on `sigmoid(router_logits)`. `aha_lambda` is the coefficient of the L1
+> sparsity regularizer added to the LM loss during training (`loss = LM_loss + aha_lambda * mean(aha_gate_soft)`,
+> excluding the last position, which has no next-token label). `aha_gate_bias_init` is a per-head bias added to
+> the router logits so training starts close to vanilla NSA (`sigmoid(4.0) ≈ 0.98`, i.e. the distant path is
+> almost always taken initially) instead of a random 50/50 split — this helps avoid router collapse early in
+> training. See [`AHNSA_DESIGN.md`](AHNSA_DESIGN.md) Sec 7 for mitigation strategies if collapse still occurs.
+
+> [!NOTE]
+> The inference-time compute-skip (`fla/ops/ahnsa/parallel.py::ahnsa_attn`) is a **call-granularity** skip: it
+> triggers when *no* (batch, token, head) in a given forward call needs the distant path, which is the common
+> regime once the router has learned meaningful sparsity. It does not yet skip compute for a subset of heads
+> within a call that still needs the distant path for other heads — see `AHNSA_DESIGN.md` Sec 9 for the
+> follow-up (active-query compaction / GQA-group-aware skipping) needed for that.
 
 ### Fused Modules
 
